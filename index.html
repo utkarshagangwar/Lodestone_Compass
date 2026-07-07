@@ -304,6 +304,8 @@
   }
 
   // ---------- Build the compass rose (SVG) ----------
+  const labelNodes = []; // { el, lx, ly } — needed to keep letters upright as the dial spins
+
   function buildDial(){
     const cx = 150, cy = 150, r = 140;
     const ns = 'http://www.w3.org/2000/svg';
@@ -334,6 +336,7 @@
       line.setAttribute('stroke-width', strokeW);
       line.setAttribute('stroke-linecap', 'round');
       frag.appendChild(line);
+      // Ticks are just radial lines — visually fine to rotate freely, no counter-rotation needed.
 
       // labels
       if(isCardinal || isIntercard){
@@ -358,6 +361,7 @@
           text.textContent = dirMap[deg];
         }
         frag.appendChild(text);
+        labelNodes.push({ el: text, lx, ly }); // counter-rotated every frame — see animate()
       } else if(isThirty){
         const labelR = r - tickLen - 12;
         const lx = cx + labelR * Math.cos(rad);
@@ -371,6 +375,7 @@
         text.setAttribute('font-size', '8');
         text.textContent = deg;
         frag.appendChild(text);
+        labelNodes.push({ el: text, lx, ly });
       }
     }
 
@@ -396,6 +401,13 @@
       const delta = shortestDelta(currentHeading, targetHeading);
       currentHeading = (currentHeading + delta * 0.14 + 360) % 360;
       dial.style.transform = `rotate(${-currentHeading}deg)`;
+
+      // Counter-rotate each label around its own point so it stays upright
+      // and readable — only its position orbits with the dial, not its orientation.
+      for(let i = 0; i < labelNodes.length; i++){
+        const n = labelNodes[i];
+        n.el.setAttribute('transform', `rotate(${currentHeading.toFixed(2)} ${n.lx} ${n.ly})`);
+      }
     }
     requestAnimationFrame(animate);
   }
@@ -403,7 +415,6 @@
 
   // ---------- Sensor handling ----------
   let firstEventTimer = null;
-  let calibrationNoted = false;
 
   function onFirstReading(){
     hasReading = true;
@@ -411,31 +422,108 @@
     if(firstEventTimer){ clearTimeout(firstEventTimer); firstEventTimer = null; }
   }
 
-  function updateHeading(deg, isTrueNorth){
-    if(isNaN(deg)) return;
+  // Circular (angle-aware) exponential smoothing — reduces raw sensor jitter
+  // in the numeric readout without adding perceptible lag. Plain averaging
+  // breaks at the 0/360 wraparound, so this averages via unit-vector components.
+  let smoothedHeading = null;
+  const SMOOTHING = 0.35; // higher = more responsive, lower = more stable
+
+  function smoothAngle(newDeg){
+    if(smoothedHeading === null){ smoothedHeading = newDeg; return newDeg; }
+    const prevRad = smoothedHeading * Math.PI / 180;
+    const newRad  = newDeg * Math.PI / 180;
+    const x = Math.cos(prevRad) * (1 - SMOOTHING) + Math.cos(newRad) * SMOOTHING;
+    const y = Math.sin(prevRad) * (1 - SMOOTHING) + Math.sin(newRad) * SMOOTHING;
+    smoothedHeading = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+    return smoothedHeading;
+  }
+
+  // W3C DeviceOrientation spec's tilt-compensated compass heading.
+  // Raw `alpha` is only correct when the device is perfectly flat; this
+  // corrects for real-world tilt using beta (front/back) and gamma (left/right).
+  function tiltCompensatedHeading(alpha, beta, gamma){
+    const d2r = Math.PI / 180;
+    const _x = beta  * d2r;
+    const _y = gamma * d2r;
+    const _z = alpha * d2r;
+
+    const cX = Math.cos(_x), cY = Math.cos(_y), cZ = Math.cos(_z);
+    const sX = Math.sin(_x), sY = Math.sin(_y), sZ = Math.sin(_z);
+
+    const Vx = -cZ * sY - sZ * sX * cY;
+    const Vy = -sZ * sY + cZ * sX * cY;
+
+    // Near-flat device (Vx and Vy both ~0) is a singularity in this formula —
+    // fall back to the simple flat-device calculation instead of atan(0/0).
+    if(Math.abs(Vx) < 1e-6 && Math.abs(Vy) < 1e-6){
+      return (360 - alpha) % 360;
+    }
+
+    let heading = Math.atan2(Vx, Vy) * (180 / Math.PI);
+    return (heading + 360) % 360;
+  }
+
+  // Alpha is relative to the device's natural orientation, not the current
+  // screen orientation — rotating into landscape throws heading off by ~90°
+  // unless corrected.
+  function screenAngleCorrection(deg){
+    const angle = (screen.orientation && typeof screen.orientation.angle === 'number')
+      ? screen.orientation.angle
+      : (window.orientation || 0);
+    return (deg - angle + 360) % 360;
+  }
+
+  function setAccuracyStatus(accuracyDeg, isTrueNorth, hasMagnetometerAbsolute){
+    if(typeof accuracyDeg === 'number' && accuracyDeg >= 0){
+      // iOS: webkitCompassAccuracy is a real, device-reported error margin
+      const kind = accuracyDeg <= 15 ? 'ok' : 'warn';
+      setStatus(`Accuracy ±${accuracyDeg.toFixed(0)}° — ${accuracyDeg <= 15 ? 'calibrated' : 'move in a figure-8 to improve calibration'}.`, kind);
+    } else if(typeof accuracyDeg === 'number' && accuracyDeg < 0){
+      setStatus('Uncalibrated — move your device in a figure-8 motion to calibrate the magnetometer.', 'warn');
+    } else if(isTrueNorth === false){
+      setStatus('Relative heading only — this device/browser has no magnetometer lock, so this is NOT true north. It will drift from the direction you started in.', 'warn');
+    } else if(hasMagnetometerAbsolute){
+      setStatus('True north (magnetometer-locked). No formal accuracy figure is exposed by this browser — expect ±5–15° typical, worse near metal or electronics.', 'ok');
+    } else {
+      setStatus('Heading source uncertain — treat as approximate.', 'warn');
+    }
+  }
+
+  function updateHeading(rawDeg, isTrueNorth, accuracyDeg, hasMagnetometerAbsolute){
+    if(isNaN(rawDeg)) return;
     if(!hasReading) onFirstReading();
 
-    targetHeading = ((deg % 360) + 360) % 360;
+    const corrected = screenAngleCorrection(((rawDeg % 360) + 360) % 360);
+    targetHeading = smoothAngle(corrected);
+
     hudValue.innerHTML = targetHeading.toFixed(0) + '<span class="hud-deg">°</span>';
     hudLabel.textContent = headingToLabel16(targetHeading);
 
-    if(!calibrationNoted){
-      setStatus(isTrueNorth ? 'Locked — true north.' : 'Uncalibrated heading — relative to start position, not true north. Move your device in a figure-8 to calibrate if your OS supports it.',
-                 isTrueNorth ? 'ok' : 'warn');
-      calibrationNoted = true;
+    // Throttle status updates — meaningful accuracy info, not spam
+    const now = performance.now();
+    if(!updateHeading._lastStatus || now - updateHeading._lastStatus > 800){
+      setAccuracyStatus(accuracyDeg, isTrueNorth, hasMagnetometerAbsolute);
+      updateHeading._lastStatus = now;
     }
   }
 
   function orientationHandler(event){
-    // iOS Safari exposes a ready-made true-north heading
+    // iOS Safari: ready-made true-north heading + a real accuracy figure
     if(typeof event.webkitCompassHeading === 'number'){
-      updateHeading(event.webkitCompassHeading, true);
+      const accuracy = typeof event.webkitCompassAccuracy === 'number' ? event.webkitCompassAccuracy : undefined;
+      updateHeading(event.webkitCompassHeading, true, accuracy, true);
       return;
     }
-    // Android / other browsers: 'absolute' means tied to true north (if magnetometer present)
+
+    // Android / other browsers: no accuracy API exists at all — be honest about that
     if(event.alpha !== null && event.alpha !== undefined){
-      const heading = (360 - event.alpha) % 360;
-      updateHeading(heading, !!event.absolute);
+      const useTiltCompensation = (event.beta !== null && event.beta !== undefined &&
+                                    event.gamma !== null && event.gamma !== undefined);
+      const heading = useTiltCompensation
+        ? tiltCompensatedHeading(event.alpha, event.beta, event.gamma)
+        : (360 - event.alpha) % 360;
+
+      updateHeading(heading, !!event.absolute, undefined, !!event.absolute);
       return;
     }
     // No usable data in this event
