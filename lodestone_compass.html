@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Heading — Compass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-0:#0a0d12;
+    --bg-1:#12161d;
+    --face:#161b23;
+    --line:#2a3140;
+    --line-soft:#1e242e;
+    --ink:#e7ebf2;
+    --ink-dim:#7b8494;
+    --amber:#ff8a3d;
+    --amber-dim:#8a4d26;
+    --teal:#2dd4bf;
+    --danger:#ff5d5d;
+  }
+
+  *{box-sizing:border-box;}
+
+  html{ height:100%; }
+
+  body{
+    margin:0;
+    min-height:100vh;
+    min-height:100dvh;      /* accounts for mobile browser chrome */
+    width:100%;
+    overflow-y:auto;         /* fallback scroll instead of hard clip on short viewports */
+    overflow-x:hidden;
+    background:
+      radial-gradient(120% 90% at 50% -10%, #182030 0%, var(--bg-0) 55%),
+      var(--bg-0);
+    color:var(--ink);
+    font-family:'Inter', sans-serif;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    -webkit-font-smoothing:antialiased;
+    padding:20px 16px;
+    padding-top:max(20px, env(safe-area-inset-top));
+    padding-bottom:max(20px, env(safe-area-inset-bottom));
+    gap:4px;
+  }
+
+  .eyebrow{
+    font-family:'Space Mono', monospace;
+    font-size:0.7rem;
+    letter-spacing:0.35em;
+    text-transform:uppercase;
+    color:var(--ink-dim);
+    margin-bottom:6px;
+  }
+
+  .hud{
+    display:flex;
+    align-items:baseline;
+    gap:10px;
+    margin-bottom:22px;
+  }
+
+  .hud-value{
+    font-family:'Space Mono', monospace;
+    font-size:clamp(2rem, 9vw, 3rem);
+    font-weight:700;
+    line-height:1;
+    letter-spacing:0.02em;
+    color:var(--ink);
+    font-variant-numeric:tabular-nums;
+    min-width:clamp(100px, 30vw, 150px);
+    text-align:right;
+  }
+  .hud-deg{ color:var(--amber); }
+
+  .hud-label{
+    font-family:'Space Mono', monospace;
+    font-size:clamp(1rem, 4vw, 1.35rem);
+    font-weight:700;
+    color:var(--teal);
+    letter-spacing:0.08em;
+    min-width:44px;
+  }
+
+  .stage{
+    position:relative;
+    width:min(78vw, 60vh, 340px);
+    height:min(78vw, 60vh, 340px);
+    flex-shrink:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+
+  /* fixed outer bezel */
+  .bezel{
+    position:absolute;
+    inset:0;
+    border-radius:50%;
+    background:
+      radial-gradient(circle at 32% 28%, #232a36 0%, #12161d 60%, #0c0f14 100%);
+    box-shadow:
+      0 0 0 1px #060810,
+      0 30px 60px -20px rgba(0,0,0,0.7),
+      inset 0 2px 3px rgba(255,255,255,0.04),
+      inset 0 -14px 30px rgba(0,0,0,0.6);
+  }
+
+  .glass{
+    position:absolute;
+    inset:14px;
+    border-radius:50%;
+    background:var(--face);
+    box-shadow:
+      inset 0 0 0 1px var(--line),
+      inset 0 18px 40px rgba(0,0,0,0.55);
+    overflow:hidden;
+  }
+
+  .glass::after{
+    content:"";
+    position:absolute;
+    inset:0;
+    border-radius:50%;
+    background:linear-gradient(155deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 30%);
+    pointer-events:none;
+  }
+
+  #dial{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    transform:rotate(0deg);
+    will-change:transform;
+  }
+
+  .tick-cardinal{ stroke:var(--ink); }
+  .tick-inter{ stroke:var(--ink-dim); }
+  .tick-minor{ stroke:var(--line); }
+
+  .label-cardinal{
+    fill:var(--ink);
+    font-family:'Space Mono', monospace;
+    font-weight:700;
+  }
+  .label-N{ fill:var(--amber); }
+  .label-inter{
+    fill:var(--ink-dim);
+    font-family:'Space Mono', monospace;
+    font-weight:700;
+  }
+  .label-deg{
+    fill:#4b5468;
+    font-family:'Space Mono', monospace;
+  }
+
+  /* fixed lubber line (points to true "forward") */
+  .lubber{
+    position:absolute;
+    top:2px;
+    left:50%;
+    transform:translateX(-50%);
+    width:0;
+    height:0;
+    border-left:9px solid transparent;
+    border-right:9px solid transparent;
+    border-top:14px solid var(--amber);
+    filter:drop-shadow(0 0 6px rgba(255,138,61,0.6));
+    z-index:5;
+  }
+
+  .center-cap{
+    position:absolute;
+    width:14px;
+    height:14px;
+    border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #4a5568, #1a1f27 70%);
+    box-shadow:0 0 0 1px var(--line), 0 2px 6px rgba(0,0,0,0.6);
+    z-index:4;
+  }
+
+  .status{
+    margin-top:26px;
+    font-family:'Space Mono', monospace;
+    font-size:0.75rem;
+    color:var(--ink-dim);
+    text-align:center;
+    min-height:1.2em;
+    letter-spacing:0.02em;
+    max-width:320px;
+    padding:0 12px;
+  }
+
+  .status.warn{ color:var(--amber); }
+  .status.error{ color:var(--danger); }
+  .status.ok{ color:var(--teal); }
+
+  #start-btn{
+    margin-top:22px;
+    padding:14px 32px;
+    font-family:'Inter', sans-serif;
+    font-size:0.95rem;
+    font-weight:600;
+    letter-spacing:0.01em;
+    color:#0a0d12;
+    background:linear-gradient(180deg, #ffb27a, var(--amber));
+    border:none;
+    border-radius:999px;
+    cursor:pointer;
+    box-shadow:0 8px 24px -6px rgba(255,138,61,0.45);
+    transition:transform 0.15s ease, box-shadow 0.15s ease, opacity 0.2s ease;
+  }
+  #start-btn:hover{ transform:translateY(-1px); box-shadow:0 10px 28px -6px rgba(255,138,61,0.6); }
+  #start-btn:active{ transform:translateY(0px) scale(0.98); }
+  #start-btn:disabled{
+    background:#2a3140;
+    color:var(--ink-dim);
+    cursor:not-allowed;
+    box-shadow:none;
+    opacity:0.7;
+  }
+
+  .pulse{
+    position:absolute;
+    inset:14px;
+    border-radius:50%;
+    box-shadow:0 0 0 0 rgba(45,212,191,0.35);
+    animation:pulse 2.2s ease-out infinite;
+    pointer-events:none;
+    z-index:6;
+  }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(45,212,191,0.35); }
+    100%{ box-shadow:0 0 0 18px rgba(45,212,191,0); }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    #dial{ transition:none; }
+    .pulse{ animation:none; }
+  }
+
+  /* short viewports (landscape phones, small tablets) — tighten vertical rhythm */
+  @media (max-height: 560px){
+    body{ padding:12px 16px; gap:2px; }
+    .eyebrow{ margin-bottom:2px; }
+    .hud{ margin-bottom:10px; }
+    .status{ margin-top:12px; font-size:0.68rem; }
+    #start-btn{ margin-top:12px; padding:10px 26px; }
+  }
+
+  /* wider screens (tablet/desktop) — cap stage growth, don't stretch huge */
+  @media (min-width: 700px){
+    .stage{ width:min(40vw, 60vh, 340px); height:min(40vw, 60vh, 340px); }
+  }
+</style>
+</head>
+<body>
+
+  <div class="eyebrow">Live Heading</div>
+  <div class="hud">
+    <div class="hud-value" id="hud-value">--<span class="hud-deg">°</span></div>
+    <div class="hud-label" id="hud-label">—</div>
+  </div>
+
+  <div class="stage">
+    <div class="bezel"></div>
+    <div class="glass">
+      <svg id="dial" viewBox="0 0 300 300"></svg>
+    </div>
+    <div class="pulse" id="pulse" style="display:none;"></div>
+    <div class="lubber"></div>
+    <div class="center-cap"></div>
+  </div>
+
+  <div class="status" id="status">Tap enable to start the compass. Requires a device with an orientation sensor.</div>
+  <button id="start-btn">Enable Compass</button>
+
+<script>
+(function(){
+
+  const btn        = document.getElementById('start-btn');
+  const statusEl    = document.getElementById('status');
+  const dial        = document.getElementById('dial');
+  const hudValue     = document.getElementById('hud-value');
+  const hudLabel     = document.getElementById('hud-label');
+  const pulseEl      = document.getElementById('pulse');
+
+  const POINTS_16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+
+  function setStatus(text, kind){
+    statusEl.textContent = text;
+    statusEl.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  function headingToLabel16(deg){
+    const idx = Math.round(((deg % 360) / 22.5)) % 16;
+    return POINTS_16[idx];
+  }
+
+  // ---------- Build the compass rose (SVG) ----------
+  function buildDial(){
+    const cx = 150, cy = 150, r = 140;
+    const ns = 'http://www.w3.org/2000/svg';
+    const frag = document.createDocumentFragment();
+
+    for(let deg = 0; deg < 360; deg += 5){
+      const rad = (deg - 90) * Math.PI / 180; // 0deg = top
+      const isCardinal   = deg % 90 === 0;
+      const isIntercard  = deg % 45 === 0 && !isCardinal;
+      const isThirty     = deg % 30 === 0 && !isCardinal && !isIntercard;
+
+      let tickLen = 8, cls = 'tick-minor', strokeW = 1;
+      if(isCardinal){ tickLen = 22; cls = 'tick-cardinal'; strokeW = 2.5; }
+      else if(isIntercard){ tickLen = 16; cls = 'tick-inter'; strokeW = 2; }
+      else if(isThirty){ tickLen = 11; cls = 'tick-minor'; strokeW = 1.4; }
+
+      const x1 = cx + (r) * Math.cos(rad);
+      const y1 = cy + (r) * Math.sin(rad);
+      const x2 = cx + (r - tickLen) * Math.cos(rad);
+      const y2 = cy + (r - tickLen) * Math.sin(rad);
+
+      const line = document.createElementNS(ns, 'line');
+      line.setAttribute('x1', x1.toFixed(2));
+      line.setAttribute('y1', y1.toFixed(2));
+      line.setAttribute('x2', x2.toFixed(2));
+      line.setAttribute('y2', y2.toFixed(2));
+      line.setAttribute('class', cls);
+      line.setAttribute('stroke-width', strokeW);
+      line.setAttribute('stroke-linecap', 'round');
+      frag.appendChild(line);
+
+      // labels
+      if(isCardinal || isIntercard){
+        const labelR = r - tickLen - 16;
+        const lx = cx + labelR * Math.cos(rad);
+        const ly = cy + labelR * Math.sin(rad);
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', lx.toFixed(2));
+        text.setAttribute('y', ly.toFixed(2));
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('dominant-baseline', 'central');
+
+        if(isCardinal){
+          const dirMap = {0:'N', 90:'E', 180:'S', 270:'W'};
+          text.setAttribute('class', 'label-cardinal' + (deg === 0 ? ' label-N' : ''));
+          text.setAttribute('font-size', '17');
+          text.textContent = dirMap[deg];
+        } else {
+          const dirMap = {45:'NE', 135:'SE', 225:'SW', 315:'NW'};
+          text.setAttribute('class', 'label-inter');
+          text.setAttribute('font-size', '11');
+          text.textContent = dirMap[deg];
+        }
+        frag.appendChild(text);
+      } else if(isThirty){
+        const labelR = r - tickLen - 12;
+        const lx = cx + labelR * Math.cos(rad);
+        const ly = cy + labelR * Math.sin(rad);
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', lx.toFixed(2));
+        text.setAttribute('y', ly.toFixed(2));
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('dominant-baseline', 'central');
+        text.setAttribute('class', 'label-deg');
+        text.setAttribute('font-size', '8');
+        text.textContent = deg;
+        frag.appendChild(text);
+      }
+    }
+
+    dial.appendChild(frag);
+  }
+
+  buildDial();
+
+  // ---------- Smooth rotation loop ----------
+  let currentHeading = 0;   // what's currently rendered
+  let targetHeading   = 0;  // latest sensor reading
+  let hasReading      = false;
+
+  function shortestDelta(from, to){
+    let d = (to - from) % 360;
+    if(d > 180) d -= 360;
+    if(d < -180) d += 360;
+    return d;
+  }
+
+  function animate(){
+    if(hasReading){
+      const delta = shortestDelta(currentHeading, targetHeading);
+      currentHeading = (currentHeading + delta * 0.14 + 360) % 360;
+      dial.style.transform = `rotate(${-currentHeading}deg)`;
+    }
+    requestAnimationFrame(animate);
+  }
+  requestAnimationFrame(animate);
+
+  // ---------- Sensor handling ----------
+  let firstEventTimer = null;
+  let calibrationNoted = false;
+
+  function onFirstReading(){
+    hasReading = true;
+    pulseEl.style.display = 'block';
+    if(firstEventTimer){ clearTimeout(firstEventTimer); firstEventTimer = null; }
+  }
+
+  function updateHeading(deg, isTrueNorth){
+    if(isNaN(deg)) return;
+    if(!hasReading) onFirstReading();
+
+    targetHeading = ((deg % 360) + 360) % 360;
+    hudValue.innerHTML = targetHeading.toFixed(0) + '<span class="hud-deg">°</span>';
+    hudLabel.textContent = headingToLabel16(targetHeading);
+
+    if(!calibrationNoted){
+      setStatus(isTrueNorth ? 'Locked — true north.' : 'Uncalibrated heading — relative to start position, not true north. Move your device in a figure-8 to calibrate if your OS supports it.',
+                 isTrueNorth ? 'ok' : 'warn');
+      calibrationNoted = true;
+    }
+  }
+
+  function orientationHandler(event){
+    // iOS Safari exposes a ready-made true-north heading
+    if(typeof event.webkitCompassHeading === 'number'){
+      updateHeading(event.webkitCompassHeading, true);
+      return;
+    }
+    // Android / other browsers: 'absolute' means tied to true north (if magnetometer present)
+    if(event.alpha !== null && event.alpha !== undefined){
+      const heading = (360 - event.alpha) % 360;
+      updateHeading(heading, !!event.absolute);
+      return;
+    }
+    // No usable data in this event
+  }
+
+  function armNoDataTimeout(){
+    firstEventTimer = setTimeout(() => {
+      if(!hasReading){
+        setStatus('No sensor data received. Your device may lack a magnetometer/gyroscope, or your browser is blocking motion sensors.', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Retry';
+      }
+    }, 4000);
+  }
+
+  async function activate(){
+    if(!window.isSecureContext){
+      setStatus('Compass access requires HTTPS.', 'error');
+      return;
+    }
+
+    const hasOrientation = typeof DeviceOrientationEvent !== 'undefined';
+    if(!hasOrientation){
+      setStatus('This browser does not support the Device Orientation API.', 'error');
+      btn.disabled = true;
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Requesting…';
+
+    try{
+      if(typeof DeviceOrientationEvent.requestPermission === 'function'){
+        const permission = await DeviceOrientationEvent.requestPermission();
+        if(permission !== 'granted'){
+          setStatus('Permission denied. Enable motion & orientation access in Settings → Safari to use the compass.', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Enable Compass';
+          return;
+        }
+      }
+
+      const eventName = ('ondeviceorientationabsolute' in window) ? 'deviceorientationabsolute' : 'deviceorientation';
+      window.addEventListener(eventName, orientationHandler, true);
+
+      setStatus('Listening for sensor data…', 'warn');
+      btn.style.display = 'none';
+      armNoDataTimeout();
+
+    }catch(err){
+      setStatus('Could not start compass: ' + err.message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Enable Compass';
+    }
+  }
+
+  btn.addEventListener('click', activate);
+
+})();
+</script>
+</body>
+</html>
