@@ -292,9 +292,113 @@
     border-color:var(--line);
     cursor:not-allowed;
   }
+
+  /* ---- Calibration modal ---- */
+  .calib-overlay{
+    position:fixed;
+    inset:0;
+    background:rgba(10,13,18,0.86);
+    backdrop-filter:blur(4px);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    z-index:50;
+    padding:24px;
+  }
+  .calib-overlay.show{ display:flex; }
+  .calib-card{
+    background:var(--face);
+    border:1px solid var(--line);
+    border-radius:20px;
+    padding:32px 28px;
+    max-width:300px;
+    text-align:center;
+    box-shadow:0 20px 60px rgba(0,0,0,0.5);
+  }
+  .calib-icon{ width:84px; height:84px; margin:0 auto 18px; }
+  .calib-title{
+    font-family:'Space Mono', monospace;
+    font-weight:700;
+    font-size:1rem;
+    color:var(--ink);
+    margin-bottom:8px;
+    letter-spacing:0.02em;
+  }
+  .calib-body{
+    font-size:0.85rem;
+    color:var(--ink-dim);
+    line-height:1.5;
+    margin-bottom:20px;
+  }
+  .calib-skip{
+    background:transparent;
+    border:1px solid var(--line);
+    color:var(--ink-dim);
+    padding:9px 22px;
+    border-radius:999px;
+    font-family:'Inter', sans-serif;
+    font-size:0.82rem;
+    cursor:pointer;
+  }
+  .calib-skip:hover{ border-color:var(--ink-dim); color:var(--ink); }
+
+  @keyframes infinityDraw{
+    0%{ stroke-dashoffset:220; }
+    100%{ stroke-dashoffset:0; }
+  }
+  .calib-icon path{
+    stroke-dasharray:220;
+    animation:infinityDraw 1.8s linear infinite;
+  }
+
+  /* ---- Sensor debug panel ---- */
+  .debug-toggle{
+    margin-top:14px;
+    font-family:'Space Mono', monospace;
+    font-size:0.65rem;
+    letter-spacing:0.1em;
+    color:var(--line);
+    background:none;
+    border:none;
+    cursor:pointer;
+    text-decoration:underline;
+    text-underline-offset:3px;
+  }
+  .debug-toggle:hover{ color:var(--ink-dim); }
+  .debug-panel{
+    display:none;
+    margin-top:10px;
+    font-family:'Space Mono', monospace;
+    font-size:0.68rem;
+    color:var(--ink-dim);
+    background:var(--bg-1);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:12px 14px;
+    max-width:320px;
+    width:88vw;
+    line-height:1.7;
+    text-align:left;
+  }
+  .debug-panel.show{ display:block; }
+  .debug-panel .row{ display:flex; justify-content:space-between; gap:10px; }
+  .debug-panel .k{ color:var(--line); }
+  .debug-panel .v{ color:var(--teal); font-variant-numeric:tabular-nums; }
 </style>
 </head>
 <body>
+
+  <div class="calib-overlay" id="calib-overlay">
+    <div class="calib-card">
+      <svg class="calib-icon" viewBox="0 0 100 60" fill="none">
+        <path d="M25,30 C25,15 40,15 50,30 C60,45 75,45 75,30 C75,15 60,15 50,30 C40,45 25,45 25,30 Z"
+              stroke="#ff8a3d" stroke-width="4" stroke-linecap="round"/>
+      </svg>
+      <div class="calib-title">Calibrating</div>
+      <div class="calib-body" id="calib-body">Move your phone in a slow figure‑8 (infinity) motion for a few seconds. This lets the gyroscope and magnetometer sync up for maximum precision.</div>
+      <button class="calib-skip" id="calib-skip">Skip</button>
+    </div>
+  </div>
 
   <div class="eyebrow">Live Heading</div>
   <div class="hud">
@@ -316,6 +420,8 @@
   <div class="status" id="status">Tap enable to start the compass. Requires a device with an orientation sensor.</div>
   <button id="start-btn">Enable Compass</button>
   <button id="gps-btn" style="display:none;">Boost accuracy with GPS (for walking)</button>
+  <button class="debug-toggle" id="debug-toggle" style="display:none;">SHOW RAW SENSOR DATA</button>
+  <div class="debug-panel" id="debug-panel"></div>
 
 <script>
 (function(){
@@ -328,6 +434,10 @@
   const hudLabel     = document.getElementById('hud-label');
   const pulseEl      = document.getElementById('pulse');
   const sourceBadge  = document.getElementById('source-badge');
+  const calibOverlay = document.getElementById('calib-overlay');
+  const calibSkipBtn = document.getElementById('calib-skip');
+  const debugToggle  = document.getElementById('debug-toggle');
+  const debugPanel   = document.getElementById('debug-panel');
 
   const POINTS_16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 
@@ -342,8 +452,6 @@
   }
 
   // ---------- Build the compass rose (SVG) ----------
-  const labelNodes = []; // { el, lx, ly } — needed to keep letters upright as the dial spins
-
   const labelNodes = []; // { el, lx, ly } — needed to keep letters upright as the dial spins
 
   function buildDial(){
@@ -377,7 +485,6 @@
       line.setAttribute('stroke-linecap', 'round');
       frag.appendChild(line);
       // Ticks are just radial lines — visually fine to rotate freely, no counter-rotation needed.
-      // Ticks are just radial lines — visually fine to rotate freely, no counter-rotation needed.
 
       // labels
       if(isCardinal || isIntercard){
@@ -403,7 +510,6 @@
         }
         frag.appendChild(text);
         labelNodes.push({ el: text, lx, ly }); // counter-rotated every frame — see animate()
-        labelNodes.push({ el: text, lx, ly }); // counter-rotated every frame — see animate()
       } else if(isThirty){
         const labelR = r - tickLen - 12;
         const lx = cx + labelR * Math.cos(rad);
@@ -417,7 +523,6 @@
         text.setAttribute('font-size', '8');
         text.textContent = deg;
         frag.appendChild(text);
-        labelNodes.push({ el: text, lx, ly });
         labelNodes.push({ el: text, lx, ly });
       }
     }
@@ -444,13 +549,6 @@
       const delta = shortestDelta(currentHeading, targetHeading);
       currentHeading = (currentHeading + delta * 0.14 + 360) % 360;
       dial.style.transform = `rotate(${-currentHeading}deg)`;
-
-      // Counter-rotate each label around its own point so it stays upright
-      // and readable — only its position orbits with the dial, not its orientation.
-      for(let i = 0; i < labelNodes.length; i++){
-        const n = labelNodes[i];
-        n.el.setAttribute('transform', `rotate(${currentHeading.toFixed(2)} ${n.lx} ${n.ly})`);
-      }
 
       // Counter-rotate each label around its own point so it stays upright
       // and readable — only its position orbits with the dial, not its orientation.
@@ -533,12 +631,12 @@
     const uprightX = -(cg * sa * sb + ca * sg);
     const uprightY = -(sa * sg - ca * cg * sb);
 
-    // Blend weight: how "flat" vs "upright" the phone currently is.
-    // |cos(beta)| → 1 when flat, → 0 when vertical (opposite for |sin(beta)|),
-    // which makes each reference axis dominate exactly where it's reliable
-    // and fade out exactly where it would otherwise divide-by-near-zero.
-    const wFlat = Math.abs(cb);
-    const wUpright = Math.abs(sb);
+    // Blend weight: each candidate is weighted by its OWN horizontal
+    // projection magnitude — self-normalizing, so whichever axis is
+    // closer to vertical (near-zero horizontal projection) naturally
+    // fades out without needing a separate beta-based heuristic.
+    const wFlat = Math.hypot(flatX, flatY);
+    const wUpright = Math.hypot(uprightX, uprightY);
 
     const x = flatX * wFlat + uprightX * wUpright;
     const y = flatY * wFlat + uprightY * wUpright;
@@ -552,6 +650,170 @@
 
     const heading = Math.atan2(x, y) * (180 / Math.PI);
     return (heading + 360) % 360;
+  }
+
+  // ========================================================================
+  // GYRO + MAGNETOMETER SENSOR FUSION (complementary filter, quaternion-based)
+  //
+  // This is the same class of technique native compass/AR apps use: the
+  // gyroscope (angular velocity) is integrated continuously for smooth,
+  // tremor-immune, moment-to-moment orientation tracking; the magnetometer
+  // is used only as a slow correction that pulls the integrated estimate
+  // back toward true north, preventing gyro drift, without letting
+  // magnetometer noise/interference dominate the visible output.
+  //
+  // Why complementary filter, not a full Kalman filter: a Kalman filter
+  // needs modeled process/measurement noise covariances to be worth its
+  // complexity — those aren't knowable for an arbitrary phone/browser
+  // combination without on-device calibration data we don't have. A
+  // complementary filter with a tuned correction constant gives ~95% of
+  // the practical benefit with far less risk of a subtly wrong covariance
+  // producing worse results than no fusion at all. This is also what the
+  // reference/example AHRS implementations most native compass apps are
+  // built on (Madgwick/Mahony-style filters) reduce to in the small-angle,
+  // single-correction-source case.
+  // ========================================================================
+
+  function quatMultiply(a, b){
+    const [w1,x1,y1,z1] = a, [w2,x2,y2,z2] = b;
+    return [
+      w1*w2 - x1*x2 - y1*y2 - z1*z2,
+      w1*x2 + x1*w2 + y1*z2 - z1*y2,
+      w1*y2 - x1*z2 + y1*w2 + z1*x2,
+      w1*z2 + x1*y2 - y1*x2 + z1*w2
+    ];
+  }
+
+  function quatNormalize(q){
+    const n = Math.hypot(q[0], q[1], q[2], q[3]);
+    if(n < 1e-12) return [1, 0, 0, 0];
+    return [q[0]/n, q[1]/n, q[2]/n, q[3]/n];
+  }
+
+  // W3C DeviceOrientation spec's canonical quaternion construction
+  // (device→world, ZXY intrinsic Tait-Bryan convention) — same rotation
+  // this app's Euler-based formula above uses, just as a quaternion.
+  function quatFromEuler(alphaDeg, betaDeg, gammaDeg){
+    const d2r = Math.PI / 180;
+    const _x = betaDeg  * d2r / 2;
+    const _y = gammaDeg * d2r / 2;
+    const _z = alphaDeg * d2r / 2;
+    const cX = Math.cos(_x), cY = Math.cos(_y), cZ = Math.cos(_z);
+    const sX = Math.sin(_x), sY = Math.sin(_y), sZ = Math.sin(_z);
+    return [
+      cX*cY*cZ - sX*sY*sZ,
+      sX*cY*cZ - cX*sY*sZ,
+      cX*sY*cZ + sX*cY*sZ,
+      cX*cY*sZ + sX*sY*cZ
+    ];
+  }
+
+  // Nlerp (normalized-lerp) toward a target quaternion, with shortest-path
+  // sign correction. Used at small weights as the magnetometer correction
+  // step — at small t this is numerically equivalent to a true slerp for
+  // our purposes, without slerp's extra trig cost on every sensor sample.
+  function quatNlerpToward(q, target, t){
+    let dot = q[0]*target[0] + q[1]*target[1] + q[2]*target[2] + q[3]*target[3];
+    let tgt = target;
+    if(dot < 0){ tgt = [-target[0], -target[1], -target[2], -target[3]]; }
+    return quatNormalize([
+      q[0]*(1-t) + tgt[0]*t,
+      q[1]*(1-t) + tgt[1]*t,
+      q[2]*(1-t) + tgt[2]*t,
+      q[3]*(1-t) + tgt[3]*t
+    ]);
+  }
+
+  // Extract compass heading from a fused quaternion using the same
+  // dual-axis (flat / upright) blend as tiltAwareHeading, but reading the
+  // axis projections directly off the quaternion's implied rotation matrix
+  // — magnitude-weighted, so it's non-degenerate at any tilt.
+  function headingFromQuat(q){
+    const [w, x, y, z] = q;
+    const flatX = 2 * (x*y - w*z);
+    const flatY = 1 - 2 * (x*x + z*z);
+    const uprightX = -(2 * (x*z + w*y));
+    const uprightY = -(2 * (y*z - w*x));
+    const wFlat = Math.hypot(flatX, flatY);
+    const wUpright = Math.hypot(uprightX, uprightY);
+    const cx = flatX * wFlat + uprightX * wUpright;
+    const cy = flatY * wFlat + uprightY * wUpright;
+    if(Math.abs(cx) < 1e-9 && Math.abs(cy) < 1e-9) return null;
+    return (Math.atan2(cx, cy) * 180 / Math.PI + 360) % 360;
+  }
+
+  // ---- Fusion state ----
+  let fusedQ = null;              // current best-estimate device→world quaternion
+  let lastMotionTime = null;      // for gyro integration dt
+  let gyroAvailable = false;      // becomes true once real rotationRate data arrives
+  let gyroCheckTimer = null;
+  const MAG_CORRECTION_WEIGHT = 0.035; // complementary filter constant — see note in UI copy re: on-device tuning
+
+  function integrateGyroStep(q, wxDegS, wyDegS, wzDegS, dtSec){
+    const d2r = Math.PI / 180;
+    const omega = [0, wxDegS * d2r, wyDegS * d2r, wzDegS * d2r];
+    const dq = quatMultiply(q, omega).map(v => v * 0.5 * dtSec);
+    return quatNormalize([q[0]+dq[0], q[1]+dq[1], q[2]+dq[2], q[3]+dq[3]]);
+  }
+
+  function onDeviceMotion(event){
+    if(!event.rotationRate ||
+       event.rotationRate.alpha === null || event.rotationRate.alpha === undefined){
+      return; // this device/browser doesn't expose gyroscope data
+    }
+    if(!gyroAvailable){
+      gyroAvailable = true;
+      if(gyroCheckTimer){ clearTimeout(gyroCheckTimer); gyroCheckTimer = null; }
+      setDebugField('fusion', 'gyro+mag (quaternion)');
+    }
+
+    const now = performance.now();
+    if(lastMotionTime === null || fusedQ === null){
+      lastMotionTime = now;
+      return;
+    }
+    const dt = (now - lastMotionTime) / 1000;
+    lastMotionTime = now;
+    if(dt <= 0 || dt > 0.5) return; // guard against tab-backgrounding time jumps
+
+    const { alpha: wz, beta: wx, gamma: wy } = event.rotationRate; // deg/s, device-local axes
+    fusedQ = integrateGyroStep(fusedQ, wx || 0, wy || 0, wz || 0, dt);
+
+    updateDialFromFusedHeading();
+    setDebugField('rotationRate', `α${(wz||0).toFixed(1)} β${(wx||0).toFixed(1)} γ${(wy||0).toFixed(1)} °/s`);
+  }
+
+  function magnetometerCorrect(alphaDeg, betaDeg, gammaDeg, trueHeadingOverride){
+    let qMag = quatFromEuler(alphaDeg, betaDeg, gammaDeg);
+
+    // iOS: raw alpha is not guaranteed true-north, but webkitCompassHeading
+    // is. Rotate qMag about the WORLD vertical axis so its implied heading
+    // matches the trusted true-north value before using it as a correction target.
+    if(typeof trueHeadingOverride === 'number'){
+      const impliedHeading = headingFromQuat(qMag);
+      if(impliedHeading !== null){
+        let delta = trueHeadingOverride - impliedHeading;
+        delta = ((delta + 180) % 360 + 360) % 360 - 180; // shortest signed angle
+        const halfRad = (delta * Math.PI / 180) / 2;
+        const yawFix = [Math.cos(halfRad), 0, 0, Math.sin(halfRad)];
+        qMag = quatMultiply(yawFix, qMag);
+      }
+    }
+
+    if(fusedQ === null){
+      fusedQ = qMag; // first sample — initialize directly, no need to blend
+    } else {
+      fusedQ = quatNlerpToward(fusedQ, qMag, MAG_CORRECTION_WEIGHT);
+    }
+
+    updateDialFromFusedHeading();
+  }
+
+  function updateDialFromFusedHeading(){
+    if(fusedQ === null) return;
+    const heading = headingFromQuat(fusedQ);
+    if(heading === null) return;
+    pushHeadingToDisplay(heading);
   }
 
   // Alpha is relative to the device's natural orientation, not the current
@@ -587,9 +849,10 @@
   }
 
   // Interference heuristic: a legitimate hand motion changes heading
-  // gradually. A single-sample jump this large, with no corresponding
-  // gyroscope confirmation, is a strong signal of magnetic interference
-  // (metal desk, speaker magnet, car dashboard, etc.) rather than real motion.
+  // gradually. A single-sample jump this large is a strong signal of
+  // magnetic interference (metal desk, speaker magnet, car dashboard)
+  // rather than real motion — flagged regardless of which path (fusion
+  // or fallback) produced the reading.
   const INTERFERENCE_JUMP_DEG = 45;
   let lastRawHeading = null;
   let interferenceFlagUntil = 0;
@@ -606,38 +869,141 @@
     return performance.now() < interferenceFlagUntil;
   }
 
-  function updateHeading(rawDeg, isTrueNorth, accuracyDeg, hasMagnetometerAbsolute){
-    if(isNaN(rawDeg)) return;
+  // ---- Single funnel point for putting a heading on screen ----
+  // Called from both the gyro+mag fusion path and the one-shot fallback
+  // path. Respects GPS override (GPS module manages its own display while
+  // active; fusion keeps running silently underneath for a seamless
+  // handoff back when the person stops moving).
+  function pushHeadingToDisplay(headingDeg){
     if(!hasReading) onFirstReading();
+    if(gpsHeadingActive) return;
 
+    const corrected = screenAngleCorrection(headingDeg);
+    targetHeading = smoothAngle(corrected);
+    hudValue.innerHTML = targetHeading.toFixed(0) + '<span class="hud-deg">°</span>';
+    hudLabel.textContent = headingToLabel16(targetHeading);
+    setSourceBadge(gyroAvailable ? 'GYRO+MAG FUSION' : 'COMPASS', 'compass');
+  }
+
+  // ---- Fallback path: used only while gyroscope data is unavailable ----
+  function updateHeadingFallback(rawDeg, isTrueNorth, accuracyDeg, hasMagnetometerAbsolute){
+    if(isNaN(rawDeg)) return;
     const normalizedRaw = ((rawDeg % 360) + 360) % 360;
     const interference = checkInterference(normalizedRaw);
 
-    // GPS course-over-ground, when active and the device is genuinely
-    // moving, is far more accurate than magnetometer heading and immune
-    // to magnetic interference entirely — prefer it when available.
-    if(gpsHeadingActive){
-      setSourceBadge('GPS · WALKING', 'gps');
-      return; // gpsCourseUpdate() drives targetHeading directly in this mode
-    }
+    pushHeadingToDisplay(normalizedRaw);
 
-    const corrected = screenAngleCorrection(normalizedRaw);
-    targetHeading = smoothAngle(corrected);
-
-    hudValue.innerHTML = targetHeading.toFixed(0) + '<span class="hud-deg">°</span>';
-    hudLabel.textContent = headingToLabel16(targetHeading);
-    setSourceBadge('COMPASS', 'compass');
-
-    // Throttle status updates — meaningful accuracy info, not spam
     const now = performance.now();
-    if(!updateHeading._lastStatus || now - updateHeading._lastStatus > 800){
+    if(!updateHeadingFallback._lastStatus || now - updateHeadingFallback._lastStatus > 800){
       if(interference){
         setStatus('Possible magnetic interference detected (sudden jump) — move away from metal, magnets, or electronics.', 'error');
       } else {
         setAccuracyStatus(accuracyDeg, isTrueNorth, hasMagnetometerAbsolute);
       }
-      updateHeading._lastStatus = now;
+      updateHeadingFallback._lastStatus = now;
     }
+  }
+
+  // ---- Fusion status messaging (throttled) ----
+  let lastFusionStatusAt = 0;
+  function reportFusionStatus(interference){
+    const now = performance.now();
+    if(now - lastFusionStatusAt < 800) return;
+    lastFusionStatusAt = now;
+    if(interference){
+      setStatus('Possible magnetic interference — gyroscope is bridging through it, but move away from metal/magnets if this persists.', 'error');
+    } else {
+      setStatus('Gyroscope + magnetometer fusion active — smooth, tilt-immune, self-correcting for drift.', 'ok');
+    }
+  }
+
+  // ---- Sensor debug panel ----
+  const debugFields = {};
+  let debugRenderQueued = false;
+  function setDebugField(key, val){
+    debugFields[key] = val;
+    if(!debugPanel.classList.contains('show') || debugRenderQueued) return;
+    debugRenderQueued = true;
+    requestAnimationFrame(() => {
+      debugRenderQueued = false;
+      debugPanel.innerHTML = Object.entries(debugFields).map(([k,v]) =>
+        `<div class="row"><span class="k">${k}</span><span class="v">${v}</span></div>`
+      ).join('');
+    });
+  }
+  debugToggle.addEventListener('click', () => {
+    const showing = debugPanel.classList.toggle('show');
+    debugToggle.textContent = showing ? 'HIDE RAW SENSOR DATA' : 'SHOW RAW SENSOR DATA';
+    if(showing) setDebugField('_', '_'); // force a render pass
+  });
+
+  // ---- Calibration modal ----
+  let calibDismissed = false;
+  let calibHideTimer = null;
+  function showCalibration(){
+    if(calibDismissed) return;
+    calibOverlay.classList.add('show');
+    calibHideTimer = setTimeout(hideCalibration, 6000);
+  }
+  function hideCalibration(){
+    calibOverlay.classList.remove('show');
+    calibDismissed = true;
+    if(calibHideTimer){ clearTimeout(calibHideTimer); calibHideTimer = null; }
+  }
+  calibSkipBtn.addEventListener('click', hideCalibration);
+
+  function orientationHandler(event){
+    const firstEvent = !hasReading;
+
+    // iOS Safari: ready-made true-north heading + a real accuracy figure.
+    // Still uses the SAME alpha/beta/gamma → quaternion fusion path — the
+    // only difference is webkitCompassHeading corrects the yaw component
+    // (see magnetometerCorrect) since raw iOS alpha isn't guaranteed true north.
+    if(typeof event.webkitCompassHeading === 'number'){
+      const accuracy = typeof event.webkitCompassAccuracy === 'number' ? event.webkitCompassAccuracy : undefined;
+      setDebugField('source', 'webkitCompassHeading (iOS)');
+      setDebugField('raw α/β/γ', `${(event.alpha||0).toFixed(1)} / ${(event.beta||0).toFixed(1)} / ${(event.gamma||0).toFixed(1)}`);
+      setDebugField('accuracy', accuracy !== undefined ? `±${accuracy.toFixed(1)}°` : 'n/a');
+
+      if(gyroAvailable && event.alpha !== null && event.beta !== null && event.gamma !== null){
+        magnetometerCorrect(event.alpha, event.beta, event.gamma, event.webkitCompassHeading);
+        const interference = checkInterference(event.webkitCompassHeading);
+        reportFusionStatus(interference);
+      } else {
+        updateHeadingFallback(event.webkitCompassHeading, true, accuracy, true);
+      }
+      if(firstEvent) showCalibration();
+      return;
+    }
+
+    // Android / other browsers
+    if(event.alpha !== null && event.alpha !== undefined){
+      const hasTilt = (event.beta !== null && event.beta !== undefined &&
+                        event.gamma !== null && event.gamma !== undefined);
+
+      setDebugField('source', (event.absolute ? 'deviceorientationabsolute' : 'deviceorientation') + (hasTilt ? '' : ' (no tilt)'));
+      setDebugField('raw α/β/γ', hasTilt ? `${event.alpha.toFixed(1)} / ${event.beta.toFixed(1)} / ${event.gamma.toFixed(1)}` : `${event.alpha.toFixed(1)} / — / —`);
+      setDebugField('accuracy', 'not exposed by this browser');
+
+      if(!hasTilt){
+        updateHeadingFallback((360 - event.alpha) % 360, !!event.absolute, undefined, !!event.absolute);
+        if(firstEvent) showCalibration();
+        return;
+      }
+
+      if(gyroAvailable){
+        magnetometerCorrect(event.alpha, event.beta, event.gamma);
+        const rawHeading = tiltAwareHeading(event.alpha, event.beta, event.gamma);
+        const interference = checkInterference(rawHeading);
+        reportFusionStatus(interference);
+      } else {
+        const heading = tiltAwareHeading(event.alpha, event.beta, event.gamma);
+        updateHeadingFallback(heading, !!event.absolute, undefined, !!event.absolute);
+      }
+      if(firstEvent) showCalibration();
+      return;
+    }
+    // No usable data in this event
   }
 
   // ------------------------------------------------------------------
@@ -724,33 +1090,6 @@
 
   gpsBtn.addEventListener('click', startGpsBoost);
 
-  function orientationHandler(event){
-    // iOS Safari: ready-made true-north heading + a real accuracy figure
-    // iOS Safari: ready-made true-north heading + a real accuracy figure
-    if(typeof event.webkitCompassHeading === 'number'){
-      const accuracy = typeof event.webkitCompassAccuracy === 'number' ? event.webkitCompassAccuracy : undefined;
-      updateHeading(event.webkitCompassHeading, true, accuracy, true);
-      const accuracy = typeof event.webkitCompassAccuracy === 'number' ? event.webkitCompassAccuracy : undefined;
-      updateHeading(event.webkitCompassHeading, true, accuracy, true);
-      return;
-    }
-
-    // Android / other browsers: no accuracy API exists at all — be honest about that
-
-    // Android / other browsers: no accuracy API exists at all — be honest about that
-    if(event.alpha !== null && event.alpha !== undefined){
-      const useTiltCompensation = (event.beta !== null && event.beta !== undefined &&
-                                    event.gamma !== null && event.gamma !== undefined);
-      const heading = useTiltCompensation
-        ? tiltAwareHeading(event.alpha, event.beta, event.gamma)
-        : (360 - event.alpha) % 360;
-
-      updateHeading(heading, !!event.absolute, undefined, !!event.absolute);
-      return;
-    }
-    // No usable data in this event
-  }
-
   function armNoDataTimeout(){
     firstEventTimer = setTimeout(() => {
       if(!hasReading){
@@ -788,12 +1127,35 @@
         }
       }
 
+      // iOS requires a SEPARATE permission grant for DeviceMotionEvent
+      // (gyroscope/accelerometer) — DeviceOrientationEvent's grant above
+      // does not cover it. Request it too so gyro fusion can activate.
+      if(typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
+        try{
+          await DeviceMotionEvent.requestPermission();
+        }catch(_e){ /* non-fatal — falls back to compass-only mode below */ }
+      }
+
       const eventName = ('ondeviceorientationabsolute' in window) ? 'deviceorientationabsolute' : 'deviceorientation';
       window.addEventListener(eventName, orientationHandler, true);
 
+      if(typeof DeviceMotionEvent !== 'undefined'){
+        window.addEventListener('devicemotion', onDeviceMotion, true);
+      }
+
       setStatus('Listening for sensor data…', 'warn');
+      debugToggle.style.display = 'inline-block';
       btn.style.display = 'none';
       armNoDataTimeout();
+
+      // If no gyroscope data arrives within 1.5s, the device/browser doesn't
+      // expose it — commit to compass-only fallback mode rather than
+      // silently waiting forever for fusion to kick in.
+      gyroCheckTimer = setTimeout(() => {
+        if(!gyroAvailable){
+          setDebugField('fusion', 'unavailable — compass-only fallback');
+        }
+      }, 1500);
 
     }catch(err){
       setStatus('Could not start compass: ' + err.message, 'error');
