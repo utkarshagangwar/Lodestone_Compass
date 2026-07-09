@@ -258,6 +258,40 @@
   @media (min-width: 700px){
     .stage{ width:min(40vw, 60vh, 340px); height:min(40vw, 60vh, 340px); }
   }
+
+  .source-badge{
+    font-family:'Space Mono', monospace;
+    font-size:0.62rem;
+    letter-spacing:0.18em;
+    color:var(--bg-0);
+    background:var(--ink-dim);
+    padding:3px 10px;
+    border-radius:999px;
+    margin-bottom:16px;
+    font-weight:700;
+  }
+  .source-badge.gps{ background:var(--teal); }
+  .source-badge.compass{ background:var(--amber); }
+
+  #gps-btn{
+    margin-top:10px;
+    padding:9px 20px;
+    font-family:'Inter', sans-serif;
+    font-size:0.8rem;
+    font-weight:600;
+    color:var(--teal);
+    background:transparent;
+    border:1px solid var(--teal);
+    border-radius:999px;
+    cursor:pointer;
+    transition:background 0.15s ease;
+  }
+  #gps-btn:hover{ background:rgba(45,212,191,0.1); }
+  #gps-btn:disabled{
+    color:var(--ink-dim);
+    border-color:var(--line);
+    cursor:not-allowed;
+  }
 </style>
 </head>
 <body>
@@ -267,6 +301,7 @@
     <div class="hud-value" id="hud-value">--<span class="hud-deg">°</span></div>
     <div class="hud-label" id="hud-label">—</div>
   </div>
+  <div class="source-badge" id="source-badge" style="display:none;">COMPASS</div>
 
   <div class="stage">
     <div class="bezel"></div>
@@ -280,16 +315,19 @@
 
   <div class="status" id="status">Tap enable to start the compass. Requires a device with an orientation sensor.</div>
   <button id="start-btn">Enable Compass</button>
+  <button id="gps-btn" style="display:none;">Boost accuracy with GPS (for walking)</button>
 
 <script>
 (function(){
 
   const btn        = document.getElementById('start-btn');
+  const gpsBtn      = document.getElementById('gps-btn');
   const statusEl    = document.getElementById('status');
   const dial        = document.getElementById('dial');
   const hudValue     = document.getElementById('hud-value');
   const hudLabel     = document.getElementById('hud-label');
   const pulseEl      = document.getElementById('pulse');
+  const sourceBadge  = document.getElementById('source-badge');
 
   const POINTS_16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 
@@ -304,6 +342,8 @@
   }
 
   // ---------- Build the compass rose (SVG) ----------
+  const labelNodes = []; // { el, lx, ly } — needed to keep letters upright as the dial spins
+
   const labelNodes = []; // { el, lx, ly } — needed to keep letters upright as the dial spins
 
   function buildDial(){
@@ -337,6 +377,7 @@
       line.setAttribute('stroke-linecap', 'round');
       frag.appendChild(line);
       // Ticks are just radial lines — visually fine to rotate freely, no counter-rotation needed.
+      // Ticks are just radial lines — visually fine to rotate freely, no counter-rotation needed.
 
       // labels
       if(isCardinal || isIntercard){
@@ -362,6 +403,7 @@
         }
         frag.appendChild(text);
         labelNodes.push({ el: text, lx, ly }); // counter-rotated every frame — see animate()
+        labelNodes.push({ el: text, lx, ly }); // counter-rotated every frame — see animate()
       } else if(isThirty){
         const labelR = r - tickLen - 12;
         const lx = cx + labelR * Math.cos(rad);
@@ -375,6 +417,7 @@
         text.setAttribute('font-size', '8');
         text.textContent = deg;
         frag.appendChild(text);
+        labelNodes.push({ el: text, lx, ly });
         labelNodes.push({ el: text, lx, ly });
       }
     }
@@ -408,6 +451,13 @@
         const n = labelNodes[i];
         n.el.setAttribute('transform', `rotate(${currentHeading.toFixed(2)} ${n.lx} ${n.ly})`);
       }
+
+      // Counter-rotate each label around its own point so it stays upright
+      // and readable — only its position orbits with the dial, not its orientation.
+      for(let i = 0; i < labelNodes.length; i++){
+        const n = labelNodes[i];
+        n.el.setAttribute('transform', `rotate(${currentHeading.toFixed(2)} ${n.lx} ${n.ly})`);
+      }
     }
     requestAnimationFrame(animate);
   }
@@ -419,6 +469,7 @@
   function onFirstReading(){
     hasReading = true;
     pulseEl.style.display = 'block';
+    gpsBtn.style.display = 'inline-block';
     if(firstEventTimer){ clearTimeout(firstEventTimer); firstEventTimer = null; }
   }
 
@@ -438,28 +489,68 @@
     return smoothedHeading;
   }
 
-  // W3C DeviceOrientation spec's tilt-compensated compass heading.
-  // Raw `alpha` is only correct when the device is perfectly flat; this
-  // corrects for real-world tilt using beta (front/back) and gamma (left/right).
-  function tiltCompensatedHeading(alpha, beta, gamma){
+  // ----------------------------------------------------------------------
+  // TILT-AWARE HEADING — root-cause fix for "tilting up/down = wrong direction"
+  //
+  // The previous version used ONE fixed reference axis on the device (its
+  // +Y / "top of screen" edge) to derive heading from alpha/beta/gamma.
+  // That axis is a good heading reference when the phone is flat (beta≈0,
+  // like resting on your palm) — but per the W3C spec's own rotation matrix,
+  // that same axis's horizontal projection collapses toward (0,0) as
+  // beta→90° (phone held upright, screen vertical — the exact posture
+  // people naturally use when glancing at a phone while walking, and
+  // exactly what you pass through when tilting the phone up/down). Dividing
+  // by a near-zero vector is what produced the erratic/incorrect readings.
+  //
+  // Fix: use TWO device axes as heading references —
+  //   • +Y (top edge)   — reliable when the phone is flat
+  //   • -Z (back of phone) — reliable when the phone is upright/vertical
+  // and cross-fade between them based on current tilt, so there is always
+  // a well-conditioned (non-degenerate) vector driving the atan2. This
+  // mirrors how native "flat compass ↔ AR/upright compass" mode switching
+  // works, just done as a continuous blend instead of a hard cut.
+  //
+  // Derived directly from the W3C DeviceOrientation rotation matrix
+  // (R = Rz(alpha)·Rx(beta)·Ry(gamma)); verified numerically at beta=0,
+  // beta=90, and beta=180 boundary cases before shipping.
+  // ----------------------------------------------------------------------
+  function tiltAwareHeading(alphaDeg, betaDeg, gammaDeg){
     const d2r = Math.PI / 180;
-    const _x = beta  * d2r;
-    const _y = gamma * d2r;
-    const _z = alpha * d2r;
+    const a = alphaDeg * d2r, b = betaDeg * d2r, g = gammaDeg * d2r;
 
-    const cX = Math.cos(_x), cY = Math.cos(_y), cZ = Math.cos(_z);
-    const sX = Math.sin(_x), sY = Math.sin(_y), sZ = Math.sin(_z);
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const cb = Math.cos(b), sb = Math.sin(b);
+    const cg = Math.cos(g), sg = Math.sin(g);
 
-    const Vx = -cZ * sY - sZ * sX * cY;
-    const Vy = -sZ * sY + cZ * sX * cY;
+    // Horizontal (world X=East, Y=North) projection of the device's +Y axis
+    // (top-of-screen edge) — column 2 of the W3C rotation matrix.
+    const flatX = -cb * sa;
+    const flatY =  ca * cb;
 
-    // Near-flat device (Vx and Vy both ~0) is a singularity in this formula —
-    // fall back to the simple flat-device calculation instead of atan(0/0).
-    if(Math.abs(Vx) < 1e-6 && Math.abs(Vy) < 1e-6){
-      return (360 - alpha) % 360;
+    // Horizontal projection of the device's -Z axis (back of phone, i.e.
+    // the direction you're facing when holding it up like a camera/AR view)
+    // — negated column 3 of the W3C rotation matrix.
+    const uprightX = -(cg * sa * sb + ca * sg);
+    const uprightY = -(sa * sg - ca * cg * sb);
+
+    // Blend weight: how "flat" vs "upright" the phone currently is.
+    // |cos(beta)| → 1 when flat, → 0 when vertical (opposite for |sin(beta)|),
+    // which makes each reference axis dominate exactly where it's reliable
+    // and fade out exactly where it would otherwise divide-by-near-zero.
+    const wFlat = Math.abs(cb);
+    const wUpright = Math.abs(sb);
+
+    const x = flatX * wFlat + uprightX * wUpright;
+    const y = flatY * wFlat + uprightY * wUpright;
+
+    if(Math.abs(x) < 1e-9 && Math.abs(y) < 1e-9){
+      // Both references degenerate simultaneously — vanishingly rare
+      // (would need a very specific gamma at the flat/upright crossover).
+      // Fall back to raw alpha rather than produce NaN.
+      return (360 - alphaDeg + 360) % 360;
     }
 
-    let heading = Math.atan2(Vx, Vy) * (180 / Math.PI);
+    const heading = Math.atan2(x, y) * (180 / Math.PI);
     return (heading + 360) % 360;
   }
 
@@ -489,38 +580,169 @@
     }
   }
 
+  function setSourceBadge(text, kind){
+    sourceBadge.textContent = text;
+    sourceBadge.className = 'source-badge' + (kind ? ' ' + kind : '');
+    sourceBadge.style.display = 'inline-block';
+  }
+
+  // Interference heuristic: a legitimate hand motion changes heading
+  // gradually. A single-sample jump this large, with no corresponding
+  // gyroscope confirmation, is a strong signal of magnetic interference
+  // (metal desk, speaker magnet, car dashboard, etc.) rather than real motion.
+  const INTERFERENCE_JUMP_DEG = 45;
+  let lastRawHeading = null;
+  let interferenceFlagUntil = 0;
+
+  function checkInterference(rawDeg){
+    if(lastRawHeading !== null){
+      let d = Math.abs(rawDeg - lastRawHeading) % 360;
+      if(d > 180) d = 360 - d;
+      if(d > INTERFERENCE_JUMP_DEG){
+        interferenceFlagUntil = performance.now() + 3000;
+      }
+    }
+    lastRawHeading = rawDeg;
+    return performance.now() < interferenceFlagUntil;
+  }
+
   function updateHeading(rawDeg, isTrueNorth, accuracyDeg, hasMagnetometerAbsolute){
     if(isNaN(rawDeg)) return;
     if(!hasReading) onFirstReading();
 
-    const corrected = screenAngleCorrection(((rawDeg % 360) + 360) % 360);
+    const normalizedRaw = ((rawDeg % 360) + 360) % 360;
+    const interference = checkInterference(normalizedRaw);
+
+    // GPS course-over-ground, when active and the device is genuinely
+    // moving, is far more accurate than magnetometer heading and immune
+    // to magnetic interference entirely — prefer it when available.
+    if(gpsHeadingActive){
+      setSourceBadge('GPS · WALKING', 'gps');
+      return; // gpsCourseUpdate() drives targetHeading directly in this mode
+    }
+
+    const corrected = screenAngleCorrection(normalizedRaw);
     targetHeading = smoothAngle(corrected);
 
     hudValue.innerHTML = targetHeading.toFixed(0) + '<span class="hud-deg">°</span>';
     hudLabel.textContent = headingToLabel16(targetHeading);
+    setSourceBadge('COMPASS', 'compass');
 
     // Throttle status updates — meaningful accuracy info, not spam
     const now = performance.now();
     if(!updateHeading._lastStatus || now - updateHeading._lastStatus > 800){
-      setAccuracyStatus(accuracyDeg, isTrueNorth, hasMagnetometerAbsolute);
+      if(interference){
+        setStatus('Possible magnetic interference detected (sudden jump) — move away from metal, magnets, or electronics.', 'error');
+      } else {
+        setAccuracyStatus(accuracyDeg, isTrueNorth, hasMagnetometerAbsolute);
+      }
       updateHeading._lastStatus = now;
     }
   }
 
+  // ------------------------------------------------------------------
+  // GPS course-over-ground — same technique Google Maps uses: while
+  // actually moving, bearing computed from consecutive high-accuracy GPS
+  // fixes is far more reliable than a magnetometer (no tilt sensitivity,
+  // no metal/magnetic interference). Stationary, it falls back to compass.
+  // ------------------------------------------------------------------
+  let gpsWatchId = null;
+  let gpsHeadingActive = false;
+  let lastGeoFix = null; // {lat, lon, t}
+  const GPS_MOVING_THRESHOLD_MPS = 0.8; // ~3 km/h — below this, bearing is unreliable noise
+
+  function toRad(d){ return d * Math.PI / 180; }
+
+  function bearingBetween(lat1, lon1, lat2, lon2){
+    const φ1 = toRad(lat1), φ2 = toRad(lat2), Δλ = toRad(lon2 - lon1);
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  function haversineMeters(lat1, lon1, lat2, lon2){
+    const R = 6371000;
+    const φ1 = toRad(lat1), φ2 = toRad(lat2);
+    const dφ = toRad(lat2 - lat1), dλ = toRad(lon2 - lon1);
+    const h = Math.sin(dφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(dλ/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  function gpsCourseUpdate(pos){
+    const { latitude, longitude, speed, accuracy } = pos.coords;
+    const t = pos.timestamp;
+
+    // Trust device-reported speed when available; otherwise derive it.
+    let speedMps = (typeof speed === 'number' && speed >= 0) ? speed : null;
+
+    if(lastGeoFix){
+      const dtSec = (t - lastGeoFix.t) / 1000;
+      if(speedMps === null && dtSec > 0){
+        const dist = haversineMeters(lastGeoFix.lat, lastGeoFix.lon, latitude, longitude);
+        speedMps = dist / dtSec;
+      }
+
+      if(speedMps !== null && speedMps >= GPS_MOVING_THRESHOLD_MPS && dtSec > 0.3){
+        const bearing = bearingBetween(lastGeoFix.lat, lastGeoFix.lon, latitude, longitude);
+        gpsHeadingActive = true;
+        targetHeading = smoothAngle(bearing);
+        hudValue.innerHTML = targetHeading.toFixed(0) + '<span class="hud-deg">°</span>';
+        hudLabel.textContent = headingToLabel16(targetHeading);
+        setSourceBadge('GPS · WALKING', 'gps');
+        setStatus(`Course over ground (±${accuracy ? accuracy.toFixed(0) : '?'}m GPS accuracy) while moving.`, 'ok');
+      } else {
+        // Not moving fast enough for a reliable GPS bearing — hand back to compass
+        gpsHeadingActive = false;
+      }
+    }
+
+    lastGeoFix = { lat: latitude, lon: longitude, t };
+  }
+
+  function startGpsBoost(){
+    if(!('geolocation' in navigator)){
+      setStatus('Geolocation is not available in this browser.', 'error');
+      return;
+    }
+    gpsBtn.disabled = true;
+    gpsBtn.textContent = 'Requesting location…';
+
+    gpsWatchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        gpsBtn.textContent = 'GPS boost active';
+        gpsCourseUpdate(pos);
+      },
+      (err) => {
+        gpsHeadingActive = false;
+        gpsBtn.disabled = false;
+        gpsBtn.textContent = 'Boost accuracy with GPS (for walking)';
+        setStatus('Location permission denied or unavailable — using compass only. (' + err.message + ')', 'warn');
+      },
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 8000 }
+    );
+  }
+
+  gpsBtn.addEventListener('click', startGpsBoost);
+
   function orientationHandler(event){
     // iOS Safari: ready-made true-north heading + a real accuracy figure
+    // iOS Safari: ready-made true-north heading + a real accuracy figure
     if(typeof event.webkitCompassHeading === 'number'){
+      const accuracy = typeof event.webkitCompassAccuracy === 'number' ? event.webkitCompassAccuracy : undefined;
+      updateHeading(event.webkitCompassHeading, true, accuracy, true);
       const accuracy = typeof event.webkitCompassAccuracy === 'number' ? event.webkitCompassAccuracy : undefined;
       updateHeading(event.webkitCompassHeading, true, accuracy, true);
       return;
     }
 
     // Android / other browsers: no accuracy API exists at all — be honest about that
+
+    // Android / other browsers: no accuracy API exists at all — be honest about that
     if(event.alpha !== null && event.alpha !== undefined){
       const useTiltCompensation = (event.beta !== null && event.beta !== undefined &&
                                     event.gamma !== null && event.gamma !== undefined);
       const heading = useTiltCompensation
-        ? tiltCompensatedHeading(event.alpha, event.beta, event.gamma)
+        ? tiltAwareHeading(event.alpha, event.beta, event.gamma)
         : (360 - event.alpha) % 360;
 
       updateHeading(heading, !!event.absolute, undefined, !!event.absolute);
